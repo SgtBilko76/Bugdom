@@ -121,6 +121,7 @@ extern	SplineDefType				**gSplineList;
 extern	TQ3BoundingBox				gObjectGroupBBoxList[MAX_3DMF_GROUPS][MAX_OBJECTS_IN_GROUP];
 extern	TQ3BoundingSphere			gObjectGroupRadiusList[MAX_3DMF_GROUPS][MAX_OBJECTS_IN_GROUP];
 extern	TQ3Matrix4x4				gCameraWorldToFrustumMatrix;
+extern	TQ3Matrix4x4				gCameraViewToFrustumMatrix;
 extern	TQ3Matrix4x4				gCameraWorldToViewMatrix;
 extern	TQ3Matrix4x4				gWindowToFrustum;
 extern	TQ3Matrix4x4				gWindowToFrustumCorrectAspect;

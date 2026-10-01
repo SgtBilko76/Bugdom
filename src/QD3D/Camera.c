@@ -10,6 +10,7 @@
 /****************************/
 
 #include "game.h"
+#include "vr.h"
 
 
 /****************************/
@@ -17,6 +18,12 @@
 /****************************/
 
 static void MoveCamera_Manual(void);
+
+#if VR_ENABLED
+	#define VR_IsActiveCam() VR_IsActive()
+#else
+	#define VR_IsActiveCam() false
+#endif
 static void InitLensFlares(void);
 
 
@@ -235,6 +242,10 @@ int	i;
 		gGameViewInfoPtr->currentCameraLookAt.x = gPlayerObj->Coord.x;				// camera lookAt
 		gGameViewInfoPtr->currentCameraLookAt.y = gPlayerObj->Coord.y + 100.0f;
 		gGameViewInfoPtr->currentCameraLookAt.z = gPlayerObj->Coord.z;
+
+#if VR_ENABLED
+		VR_SetRigYaw(gPlayerObj->Rot.y);		// VR rig starts out behind the player, like the camera
+#endif
 	}
 			
 			
@@ -349,6 +360,26 @@ static void FillLookAtMatrix(
 
 void CalcCameraMatrixInfo(QD3DSetupOutputType *setupInfo)
 {
+#if VR_ENABLED
+	if (VR_IsActive())
+	{
+		VR_ComputeCameraMatrices(
+				&setupInfo->currentCameraCoords,
+				&setupInfo->currentCameraLookAt,
+				setupInfo->hither,
+				setupInfo->yon,
+				gIsInGame && gPlayerObj != NULL,
+				&gCameraWorldToViewMatrix,
+				&gCameraViewToFrustumMatrix);
+
+		glMatrixMode(GL_PROJECTION);
+		glLoadMatrixf((const GLfloat*) &gCameraViewToFrustumMatrix.value[0][0]);
+		glMatrixMode(GL_MODELVIEW);
+		glLoadMatrixf((const GLfloat*) &gCameraWorldToViewMatrix.value[0][0]);
+	}
+	else
+#endif
+	{
 			/* INIT PROJECTION MATRIX */
 
 	glMatrixMode(GL_PROJECTION);
@@ -373,6 +404,7 @@ void CalcCameraMatrixInfo(QD3DSetupOutputType *setupInfo)
 			&setupInfo->currentCameraUpVector);
 
 	glLoadMatrixf((const GLfloat*) &gCameraWorldToViewMatrix.value[0][0]);
+	}
 
 			/* UPDATE LIGHT POSITIONS */
 
@@ -479,9 +511,28 @@ float		fps = gFramesPerSecondFrac;
 	pToC.x = gGameViewInfoPtr->currentCameraCoords.x - myX;				// calc player->camera vector
 	pToC.y = gGameViewInfoPtr->currentCameraCoords.z - myZ;
 	Q3Vector2D_Normalize(&pToC,&pToC);									// normalize it
+
+#if VR_ENABLED
+	if (VR_IsActive())
+	{
+		// In VR, the camera's direction around the player is dictated by the VR rig,
+		// which only turns in discrete snap turns. This avoids nauseating smooth rotations.
+		pToC.x = sinf(VR_GetRigYaw());
+		pToC.y = cosf(VR_GetRigYaw());
+	}
+#endif
 	
 	target.x = myX + (pToC.x * gCameraDistFromMe);						// target is appropriate dist based on cam's current coord
 	target.z = myZ + (pToC.y * gCameraDistFromMe);
+
+#if VR_ENABLED
+	if (VR_IsActive() && VR_ConsumeSnapTurn())
+	{
+		// Teleport camera to its new position after a snap turn instead of swinging it around
+		gGameViewInfoPtr->currentCameraCoords.x = target.x;
+		gGameViewInfoPtr->currentCameraCoords.z = target.z;
+	}
+#endif
 
 
 			/* MOVE CAMERA TOWARDS POINT */
@@ -526,7 +577,7 @@ float		fps = gFramesPerSecondFrac;
 	/* SEE IF USER ROTATE CAMERA */
 	/*****************************/
 
-	if (gCameraControlDelta.x != 0)
+	if (gCameraControlDelta.x != 0 && !(VR_ENABLED && VR_IsActiveCam()))
 	{
 		TQ3Matrix4x4	m;
 		float			r = gCameraControlDelta.x * fps;

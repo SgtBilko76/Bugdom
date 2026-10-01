@@ -11,7 +11,8 @@
 /****************************/
 
 #include "game.h"
-#include <SDL3/SDL_opengl.h>
+#include "gl_compat.h"
+#include "vr.h"
 
 
 /****************************/
@@ -271,10 +272,49 @@ static void CreateLights(QD3DLightDefType *lightDefPtr)
 
 /******************* QD3D DRAW SCENE *********************/
 
+#if VR_ENABLED
+static void QD3D_DrawScene_VR(QD3DSetupOutputType *setupInfo, void (*drawRoutine)(const QD3DSetupOutputType *))
+{
+	if (VR_BeginFrame())
+	{
+		Render_StartFrame();											// clears eye & HUD targets
+
+		setupInfo->aspectRatio = 1.0f;									// unused in VR: projection comes from the headset
+		CalcCameraMatrixInfo(setupInfo);
+
+		if (drawRoutine)
+			drawRoutine(setupInfo);
+
+		int32_t hoverID;
+		PickObject(0, 0, &hoverID);										// update laser pointer hit (for visual feedback)
+
+		Render_FlushQueue();
+
+		Render_Enter2D_Full640x480();									// HUD layer
+		SubmitInfobarOverlay();
+		QD3D_DrawDebugTextMesh();
+		Render_FlushQueue();
+		Render_Exit2D();
+
+		Render_EndFrame();
+	}
+
+	VR_EndFrame(gGammaFadeFactor);										// fade is applied by the compositor
+}
+#endif
+
 void QD3D_DrawScene(QD3DSetupOutputType *setupInfo, void (*drawRoutine)(const QD3DSetupOutputType *))
 {
 	GAME_ASSERT(setupInfo);
 	GAME_ASSERT(setupInfo->isActive);									// make sure it's legit
+
+#if VR_ENABLED
+	if (VR_IsActive())
+	{
+		QD3D_DrawScene_VR(setupInfo, drawRoutine);
+		return;
+	}
+#endif
 
 			/* START RENDERING */
 
@@ -335,6 +375,27 @@ void QD3D_DrawScene(QD3DSetupOutputType *setupInfo, void (*drawRoutine)(const QD
 	}
 
 	Render_EndFrame();
+
+#if __ANDROID__ && 1	// TEMP DEBUG
+	{
+		static int frameNo = 0;
+		frameNo++;
+		GLenum err = glGetError();
+		if (err || frameNo % 30 == 0)
+			SDL_Log("DBG frame %d glError 0x%x win %dx%d", frameNo, err, gWindowWidth, gWindowHeight);
+		if (frameNo % 300 == 0)
+		{
+			int w = gWindowWidth, h = gWindowHeight;
+			uint8_t* px = SDL_malloc(w*h*4);
+			glReadPixels(0, 0, w, h, GL_RGBA, GL_UNSIGNED_BYTE, px);
+			char path[512];
+			SDL_snprintf(path, sizeof(path), "%s/frame.rgba", SDL_GetAndroidInternalStoragePath());
+			SDL_IOStream* io = SDL_IOFromFile(path, "wb");
+			if (io) { SDL_WriteIO(io, px, w*h*4); SDL_CloseIO(io); }
+			SDL_free(px);
+		}
+	}
+#endif
 
 	SDL_GL_SwapWindow(gSDLWindow);
 }

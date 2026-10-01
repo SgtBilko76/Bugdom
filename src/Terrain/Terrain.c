@@ -10,6 +10,7 @@
 /***************/
 
 #include "game.h"
+#include "vr.h"
 
 
 /****************************/
@@ -1505,6 +1506,9 @@ void DrawTerrain(const QD3DSetupOutputType *setupInfo)
 		/* DRAW IN-GAME 2D ELEMENTS */
 
 	Render_Enter2D_NormalizedCoordinates(setupInfo->aspectRatio);
+#if VR_ENABLED
+	if (!VR_IsActive())											// screen-space effect doesn't make sense on the VR HUD layer
+#endif
 	DrawLensFlare(setupInfo);
 	if (gPauseQuad)
 		Render_SubmitMesh(gPauseQuad, NULL, &kDefaultRenderMods_UI, &kQ3Point3D_Zero);

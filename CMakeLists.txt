@@ -87,6 +87,10 @@ else()
 	endif()
 	message("Building SDL3 from source: " ${SDL3_DIR})
 	add_subdirectory("${SDL3_DIR}" EXCLUDE_FROM_ALL)
+
+	# Pomme calls find_package(SDL3); satisfy it with the in-tree SDL3::SDL3 target
+	file(WRITE "${CMAKE_BINARY_DIR}/sdl3-stub/SDL3Config.cmake" "# SDL3 is built from source in this tree\n")
+	set(SDL3_DIR "${CMAKE_BINARY_DIR}/sdl3-stub")
 endif()
 
 #------------------------------------------------------------------------------
@@ -95,7 +99,9 @@ endif()
 
 add_subdirectory(extern/Pomme)
 
-find_package(OpenGL REQUIRED)
+if(NOT ANDROID)
+	find_package(OpenGL REQUIRED)
+endif()
 
 #------------------------------------------------------------------------------
 # EXECUTABLE TARGET
@@ -119,7 +125,12 @@ elseif(APPLE)
 	set_source_files_properties(${CMAKE_SOURCE_DIR}/packaging/${GAME_TARGET}.icns PROPERTIES MACOSX_PACKAGE_LOCATION "Resources")
 endif()
 
-add_executable(${GAME_TARGET} ${GAME_SOURCES})
+if(ANDROID)
+	# On Android, the game is a shared library that SDL's Java activity loads
+	add_library(${GAME_TARGET} SHARED ${GAME_SOURCES})
+else()
+	add_executable(${GAME_TARGET} ${GAME_SOURCES})
+endif()
 
 target_include_directories(${GAME_TARGET} PRIVATE ${GAME_SRCDIR}/Headers)
 
@@ -209,7 +220,12 @@ else()
 endif()
 
 # Link core dependencies
-target_link_libraries(${GAME_TARGET} PRIVATE Pomme OpenGL::GL)
+if(ANDROID)
+	find_package(OpenXR REQUIRED CONFIG)		# from the openxr_loader_for_android prefab package
+	target_link_libraries(${GAME_TARGET} PRIVATE Pomme GLESv3 EGL android log OpenXR::openxr_loader)
+else()
+	target_link_libraries(${GAME_TARGET} PRIVATE Pomme OpenGL::GL)
+endif()
 
 # Add required frameworks for KillMacMouseAcceleration
 if(APPLE)

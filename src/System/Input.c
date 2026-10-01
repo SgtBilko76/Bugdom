@@ -11,6 +11,7 @@
 /***************/
 
 #include "game.h"
+#include "vr.h"
 
 
 /**********************/
@@ -242,6 +243,18 @@ void UpdateInput(void)
 
 		/* UPDATE KEYMAP */
 		
+#if __ANDROID__ && 1	// TEMP DEBUG
+	{
+		static int dbgCounter = 0;
+		if (++dbgCounter % 90 == 0)
+			SDL_Log("DBG input: front=%d gamepad=%p (%s) south=%d leftx=%d",
+					WeAreFrontProcess(), (void*) gSDLGamepad,
+					gSDLGamepad ? SDL_GetGamepadName(gSDLGamepad) : "-",
+					gSDLGamepad ? SDL_GetGamepadButton(gSDLGamepad, SDL_GAMEPAD_BUTTON_SOUTH) : -1,
+					gSDLGamepad ? SDL_GetGamepadAxis(gSDLGamepad, SDL_GAMEPAD_AXIS_LEFTX) : -1);
+	}
+#endif
+
 	if (WeAreFrontProcess())								// only read keys if we're the front process
 		UpdateKeyMap();
 	else													// otherwise, just clear it out
@@ -655,15 +668,35 @@ void InitAnalogCursor(void)
 	SDL_memset(&gAnalogCursor, 0, sizeof(gAnalogCursor));
 
 	gAnalogCursor.pos = GetMousePosition();
+
+#if VR_ENABLED
+	VR_SetPointerEnabled(true);		// point & click with the right controller's laser
+#endif
 }
 
 void ShutdownAnalogCursor(void)
 {
 	SDL_HideCursor();
+
+#if VR_ENABLED
+	VR_SetPointerEnabled(false);
+#endif
 }
 
 bool MoveAnalogCursor(int* outMouseX, int* outMouseY)
 {
+#if VR_ENABLED
+	if (VR_IsActive())
+	{
+		// The laser pointer replaces the cursor; picking uses the controller ray (see PickObject)
+		gAnalogCursor.steeredByThumbstick = true;
+		gAnalogCursor.didMove = true;
+		if (outMouseX) *outMouseX = gWindowWidth / 2;
+		if (outMouseY) *outMouseY = gWindowHeight / 2;
+		return true;
+	}
+#endif
+
 	SDL_ShowCursor();
 
 	gAnalogCursor.didMove = false;
@@ -685,7 +718,7 @@ bool MoveAnalogCursor(int* outMouseX, int* outMouseY)
 		gAnalogCursor.didMove = true;
 		gAnalogCursor.pos = newMouse;
 	}
-	else if (thumbstick.x != 0 && thumbstick.y != 0)
+	else if (thumbstick.x != 0 || thumbstick.y != 0)
 	{
 		gAnalogCursor.steeredByThumbstick = true;
 		gAnalogCursor.didMove = true;
@@ -713,6 +746,11 @@ bool MoveAnalogCursor(int* outMouseX, int* outMouseY)
 
 bool IsAnalogCursorClicked(void)
 {
+#if VR_ENABLED
+	if (VR_IsActive())
+		return GetNewKeyState(kKey_UI_PadConfirm) || GetNewKeyState(kKey_Kick);		// A button or trigger
+#endif
+
 	return FlushMouseButtonPress()
 		|| (gAnalogCursor.steeredByThumbstick && GetNewKeyState(kKey_UI_PadConfirm));
 }

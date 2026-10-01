@@ -9,7 +9,8 @@
 
 #include "game.h"
 #include <SDL3/SDL.h>
-#include <SDL3/SDL_opengl.h>
+#include "gl_compat.h"
+#include "vr.h"
 #include <QD3D.h>
 
 
@@ -38,6 +39,7 @@ typedef struct RendererState
 	bool		hasFlag_glDepthMask;
 	bool		blendFuncIsAdditive;
 	bool		sceneHasFog;
+	bool		in2D;
 	GLboolean	wantColorMask;
 	const TQ3Matrix4x4*	currentTransform;
 } RendererState;
@@ -55,6 +57,7 @@ typedef struct MeshQueueEntry
 
 static MeshQueueEntry		gMeshQueueEntryPool[MESHQUEUE_MAX_SIZE];
 static MeshQueueEntry*		gMeshQueuePtrs[MESHQUEUE_MAX_SIZE];
+static MeshQueueEntry*		gMeshQueueScratch[MESHQUEUE_MAX_SIZE];		// working copy when drawing the same queue to several targets
 static int					gMeshQueueSize = 0;
 static bool					gFrameStarted = false;
 
@@ -67,7 +70,14 @@ static void BeginShadingPass(const MeshQueueEntry* entry);
 static void PrepareOpaqueShading(const MeshQueueEntry* entry);
 static void PrepareAlphaShading(const MeshQueueEntry* entry);
 static void SendGeometry(const MeshQueueEntry* entry);
+static void DrawSortedQueue(MeshQueueEntry** ptrs, int numEntries);
 
+
+#if VR_ENABLED
+	#define VR_IsActiveSafe() VR_IsActive()
+#else
+	#define VR_IsActiveSafe() false
+#endif
 
 #pragma mark -
 
@@ -233,6 +243,14 @@ void Render_CreateContext(void)
 
 	GAME_ASSERT(gGLContext);
 
+#if __ANDROID__
+	GLC_Init();
+#endif
+
+#if VR_ENABLED
+	VR_Init();
+#endif
+
 	// On Windows, proc addresses are only valid for the current context,
 	// so we must get proc addresses everytime we recreate the context.
 	//Render_GetGLProcAddresses();
@@ -281,6 +299,7 @@ void Render_InitState(const TQ3ColorRGBA* clearColor)
 	
 	gState.boundTexture = 0;
 	gState.sceneHasFog = false;
+	gState.in2D = false;
 	gState.currentTransform = NULL;
 
 	glClearColor(clearColor->r, clearColor->g, clearColor->b, 1.0f);
@@ -529,13 +548,14 @@ void Render_StartFrame(void)
 	// Clear color & depth buffers.
 	SetFlag(glDepthMask, true);	// The depth mask must be re-enabled so we can clear the depth buffer.
 
-	GLbitfield clearWhat = GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT;
-#if OSXPPC
-	// On PPC, bypass clear color in lawn levels (the cyc covers enough of the view)
-	if (gIsInGame && gLevelType == LEVEL_TYPE_LAWN && gCyclorama && gDebugMode != DEBUG_MODE_WIREFRAME)
-		clearWhat &= ~GL_COLOR_BUFFER_BIT;
+	SetColorMask(GL_TRUE);
+
+#if VR_ENABLED
+	if (VR_IsActive())
+		VR_ClearTargets();
+	else
 #endif
-	glClear(clearWhat);
+	glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
 	GAME_ASSERT(gState.currentTransform == NULL);
 
@@ -545,6 +565,10 @@ void Render_StartFrame(void)
 
 void Render_SetViewport(int x, int y, int w, int h)
 {
+#if VR_ENABLED
+	if (VR_IsActive())		// VR render targets set their own viewports
+		return;
+#endif
 	glViewport(x, y, w, h);
 }
 
@@ -567,6 +591,59 @@ void Render_FlushQueue(void)
 			DrawOrderComparator
 	);
 
+#if VR_ENABLED
+	if (VR_IsActive())
+	{
+		if (gState.in2D)
+		{
+			// 2D elements go to the floating HUD layer
+			VR_BindUITarget();
+			SDL_memcpy(gMeshQueueScratch, gMeshQueuePtrs, sizeof(gMeshQueuePtrs[0]) * gMeshQueueSize);
+			DrawSortedQueue(gMeshQueueScratch, gMeshQueueSize);
+		}
+		else
+		{
+			// 3D scene: draw the same queue once per eye
+			const GLfloat* centerView = (const GLfloat*) &gCameraWorldToViewMatrix.value[0][0];
+
+			for (int eye = 0; eye < VR_GetEyeCount(); eye++)
+			{
+				const GLfloat* eyeView = (const GLfloat*) &VR_GetEyeWorldToView(eye)->value[0][0];
+
+				VR_BindEyeTarget(eye);
+				glMatrixMode(GL_PROJECTION);
+				glLoadMatrixf((const GLfloat*) &VR_GetEyeViewToFrustum(eye)->value[0][0]);
+				glMatrixMode(GL_MODELVIEW);
+				glLoadMatrixf(eyeView);
+				GLC_RebaseLights(centerView, eyeView);
+
+				SDL_memcpy(gMeshQueueScratch, gMeshQueuePtrs, sizeof(gMeshQueuePtrs[0]) * gMeshQueueSize);
+				DrawSortedQueue(gMeshQueueScratch, gMeshQueueSize);
+				VR_DrawPointer();
+
+				GLC_RebaseLights(eyeView, centerView);
+			}
+
+			// Restore the center-eye camera
+			glMatrixMode(GL_PROJECTION);
+			glLoadMatrixf((const GLfloat*) &gCameraViewToFrustumMatrix.value[0][0]);
+			glMatrixMode(GL_MODELVIEW);
+			glLoadMatrixf(centerView);
+		}
+	}
+	else
+#endif
+	{
+		DrawSortedQueue(gMeshQueuePtrs, gMeshQueueSize);
+	}
+
+	// Clear mesh draw queue
+	gMeshQueueSize = 0;
+}
+
+// Draws pre-sorted queue entries. Note: reorders the contents of ptrs[].
+static void DrawSortedQueue(MeshQueueEntry** ptrs, int numEntries)
+{
 	//--------------------------------------------------------------
 	// PASS 1: OPAQUE COLOR + DEPTH
 	// - Draw opaque meshes (pre-sorted front-to-back) to color AND depth buffers.
@@ -577,9 +654,9 @@ void Render_FlushQueue(void)
 	glDepthFunc(GL_LESS);
 	DisableState(GL_BLEND);
 
-	for (int i = 0; i < gMeshQueueSize; i++)
+	for (int i = 0; i < numEntries; i++)
 	{
-		MeshQueueEntry* entry = gMeshQueuePtrs[i];
+		MeshQueueEntry* entry = ptrs[i];
 
 		if (!entry->meshIsTransparent)
 		{
@@ -592,7 +669,7 @@ void Render_FlushQueue(void)
 		{
 			// The mesh is transparent -- defer its color pass
 			GAME_ASSERT(numDeferredColorMeshes <= i);
-			gMeshQueuePtrs[numDeferredColorMeshes++] = entry;		// shoot back to start of queue for next pass
+			ptrs[numDeferredColorMeshes++] = entry;		// shoot back to start of queue for next pass
 
 			// If a transparent mesh wants to write to the Z-buffer, do it now
 			if (!(entry->mods->statusBits & STATUS_BIT_NOZWRITE))
@@ -618,7 +695,7 @@ void Render_FlushQueue(void)
 
 		for (int i = 0; i < numDeferredColorMeshes; i++)
 		{
-			const MeshQueueEntry* entry = gMeshQueuePtrs[i];
+			const MeshQueueEntry* entry = ptrs[i];
 			BeginShadingPass(entry);
 			PrepareAlphaShading(entry);
 			SendGeometry(entry);
@@ -627,9 +704,6 @@ void Render_FlushQueue(void)
 
 	//--------------------------------------------------------------
 	// CLEAN UP
-
-	// Clear mesh draw queue
-	gMeshQueueSize = 0;
 
 	// Clear transform
 	if (NULL != gState.currentTransform)
@@ -1072,7 +1146,13 @@ TQ3Vector2D FitRectKeepAR(
 
 void Render_Enter2D_Full640x480(void)
 {
-	if (gGamePrefs.force4x3AspectRatio)
+	gState.in2D = true;
+
+	if (VR_ENABLED && VR_IsActiveSafe())
+	{
+		// VR HUD layer is always 4:3; viewport is set by the render target
+	}
+	else if (gGamePrefs.force4x3AspectRatio)
 	{
 		TQ3Vector2D fitted = FitRectKeepAR(GAME_VIEW_WIDTH, GAME_VIEW_HEIGHT, gWindowWidth, gWindowHeight);
 		glViewport(
@@ -1097,6 +1177,11 @@ void Render_Enter2D_Full640x480(void)
 
 void Render_Enter2D_NormalizedCoordinates(float aspect)
 {
+	gState.in2D = true;
+
+	if (VR_ENABLED && VR_IsActiveSafe())
+		aspect = (float) GAME_VIEW_WIDTH / (float) GAME_VIEW_HEIGHT;
+
 	glMatrixMode(GL_PROJECTION);
 	glPushMatrix();
 	glLoadIdentity();
@@ -1108,6 +1193,8 @@ void Render_Enter2D_NormalizedCoordinates(float aspect)
 
 void Render_Enter2D_NativeResolution(void)
 {
+	gState.in2D = true;
+
 	glMatrixMode(GL_PROJECTION);
 	glPushMatrix();
 	glLoadIdentity();
@@ -1119,6 +1206,8 @@ void Render_Enter2D_NativeResolution(void)
 
 void Render_Exit2D(void)
 {
+	gState.in2D = false;
+
 	glMatrixMode(GL_PROJECTION);
 	glPopMatrix();
 	glMatrixMode(GL_MODELVIEW);
