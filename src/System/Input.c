@@ -243,17 +243,6 @@ void UpdateInput(void)
 
 		/* UPDATE KEYMAP */
 		
-#if __ANDROID__ && 1	// TEMP DEBUG
-	{
-		static int dbgCounter = 0;
-		if (++dbgCounter % 90 == 0)
-			SDL_Log("DBG input: front=%d gamepad=%p (%s) south=%d leftx=%d",
-					WeAreFrontProcess(), (void*) gSDLGamepad,
-					gSDLGamepad ? SDL_GetGamepadName(gSDLGamepad) : "-",
-					gSDLGamepad ? SDL_GetGamepadButton(gSDLGamepad, SDL_GAMEPAD_BUTTON_SOUTH) : -1,
-					gSDLGamepad ? SDL_GetGamepadAxis(gSDLGamepad, SDL_GAMEPAD_AXIS_LEFTX) : -1);
-	}
-#endif
 
 	if (WeAreFrontProcess())								// only read keys if we're the front process
 		UpdateKeyMap();
