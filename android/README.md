@@ -1,5 +1,7 @@
 # Bugdom VR (Meta Quest / Pico) - Beta
 
+**Download, install guide, controls and pictures: [portroyale.online/bugdom.html](https://portroyale.online/bugdom.html)**
+
 Unofficial standalone-VR build of [Bugdom](https://github.com/jorio/Bugdom) (Pangea Software 1999,
 modern port by Iliyas Jorio), running natively on Android-based headsets via OpenXR.
 
