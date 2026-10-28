@@ -18,6 +18,8 @@ modern port by Iliyas Jorio), running natively on Android-based headsets via Ope
 
 ## Controls
 
+![Bugdom VR controller mapping](../docs/controls.webp)
+
 | Controller | Action |
 |---|---|
 | Left stick | Move |
